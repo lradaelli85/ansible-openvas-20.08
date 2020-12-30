@@ -134,6 +134,11 @@
       group: redis
 
 
+  - name: reload systemd
+    shell: 
+      cmd: systemctl daemon-reload
+
+
   - name: Create OpenVas empty configuration file
     file:
       path: '{{ gvm_home }}etc/openvas/openvas.conf'
@@ -144,7 +149,7 @@
 
   - name: fix redis socket
     lineinfile:
-      path: "{{ gvm_home}}etc/openvas/openvas.conf"
+      path: "{{ gvm_home }}etc/openvas/openvas.conf"
       line: "db_address = /run/redis-openvas/redis.sock"
 
 
@@ -167,15 +172,15 @@
       src: disable-thp.service
       dest: /etc/systemd/system/disable-thp.service
     notify:
-    - reload systemd
+      - reload systemd
 
 
   - name: enable and start redis and thp
     shell:
       cmd: echo "restarting redis and thp services"
     notify: 
-    - enable and start redis
-    - enable and start thp
+      - enable and start redis
+      - enable and start thp
 
 
   - name: create sudo configuration for gvm users
@@ -191,6 +196,29 @@
     loop:
       - 'gvm ALL = NOPASSWD: {{ gvm_home }}sbin/openvas'
       - 'gvm ALL = NOPASSWD: {{ gvm_home }}sbin/gsad'
+
+
+  - name: ensure that redis is running
+    service_facts:
+
+
+  - name: redis service status
+    debug:
+      var: ansible_facts.services["redis-server@openvas.service"].state
+
+
+  - name: restart redis
+    service:
+      name: redis-server@openvas.service
+      state: restarted
+
+  - name: re-ensure that redis is running
+    service_facts:
+
+
+  - name: redis service status
+    debug:
+      var: ansible_facts.services["redis-server@openvas.service"].state
 
   
   - name: update nvt
@@ -345,10 +373,10 @@
       - ospd-openvas.service
       - firewall.service
     notify:
-    - reload systemd
-    - enable and start gvmd
-    - enable and start gsad
-    - enable and start ospd-openvas
+      - reload systemd
+      - enable and start gvmd
+      - enable and start gsad
+      - enable and start ospd-openvas
 
 
   - name: get scanner UUID
@@ -382,7 +410,7 @@
       dest: /etc/cron.d/
       mode: 0644
     notify:
-    - restart cron daemon
+      - restart cron daemon
 
 
   - name: running post-install actions - enable incoming connection on TCP 22,443 only
@@ -391,4 +419,4 @@
       dest: /etc/firewall/
       mode: 0744
     notify:
-    - enable and start firewall
+      - enable and start firewall
