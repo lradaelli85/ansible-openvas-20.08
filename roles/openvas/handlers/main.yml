@@ -59,3 +59,17 @@
       name: firewall
       enabled: yes
       state: started
+
+
+  - name: enable and start redis
+    service:
+      name: redis-server@openvas.service
+      enabled: yes
+      state: started
+
+
+  - name: enable and start thp
+    service:
+      name: disable-thp.service
+      enabled: yes
+      state: started
