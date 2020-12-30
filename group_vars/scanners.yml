@@ -1,0 +1,3 @@
+    gvm_home: /opt/gvm/
+    gvm_src: /opt/gvm/src
+    gvm_version: 20.08

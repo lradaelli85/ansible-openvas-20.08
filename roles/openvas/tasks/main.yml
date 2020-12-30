@@ -1,0 +1,400 @@
+  - name: Copy ld.so file
+    copy:
+      src: gvm.conf
+      dest: /etc/ld.so.conf.d/
+      mode: 0644
+
+
+  - name: Create gvm group
+    group:
+      name: gvm
+
+
+  - name: Create gvm user
+    user:
+      name: gvm
+      home: "{{ gvm_home }}"
+      password: '!'
+      group: gvm
+      groups: redis,gvm
+      shell: /bin/bash
+
+
+  - name: add gvm .bashrc parameters
+    lineinfile:
+      path: '{{ gvm_home }}.bashrc'
+      line: "{{ item }}"
+    loop:
+      - export PATH="$PATH:{{ gvm_home }}bin:{{ gvm_home }}sbin:{{ gvm_home }}.local/bin"
+
+
+  - name: Create gvm source directories
+    file:
+      path: '{{ gvm_src }}'
+      state: directory
+      owner: gvm
+      group: gvm
+
+
+  - name: Download source from GIT
+    shell: 
+      cmd: /usr/bin/git -C '{{ gvm_src }}' clone -b "{{ item }}"-"{{ gvm_version }}" --single-branch  https://github.com/greenbone/"{{ item }}".git
+    args:
+      executable: /bin/bash
+    loop:
+      - gvm-libs
+      - openvas
+      - gvmd
+      - gsa
+      - ospd-openvas
+      - ospd
+    become: true
+    become_user: gvm
+
+
+  - name: Download source from GIT
+    shell: 
+      cmd: /usr/bin/git -C '{{ gvm_src }}' clone -b master --single-branch  https://github.com/greenbone/openvas-smb.git
+    args:
+      executable: /bin/bash
+    become: true
+    become_user: gvm
+
+
+  - name: Create source directories
+    file:
+      path: "{{ item }}"
+      state: directory
+      owner: gvm
+      group: gvm
+    loop:
+      - '{{ gvm_src }}/gvm-libs/build'
+      - '{{ gvm_src }}/openvas-smb/build'
+      - '{{ gvm_src }}/openvas/build'
+      - '{{ gvm_src }}/gvmd/build'
+      - '{{ gvm_src }}/gsa/build'
+
+
+  - name: install gvm-libs,gvmd,openvas,gsa
+    shell: 
+      cmd: "{{ item[1] }}"
+      chdir: "{{gvm_src}}/{{ item[0] }}/build/"
+    args:
+      executable: /bin/bash
+    environment:
+      PKG_CONFIG_PATH: "{{ gvm_home }}lib/pkgconfig"
+    with_nested:
+      - [ "gvm-libs" , "openvas" , "gvmd" , "gsa" ]
+      - [ "/usr/bin/cmake -DCMAKE_INSTALL_PREFIX={{ gvm_home }} ..", "make" , "make doc" , "make install" ]
+    become: true
+    become_user: gvm
+
+
+  - name: Create gsa log file
+    file:
+      path: '{{ gvm_home }}/var/log/gvm/gsad.log'
+      state: touch
+      owner: gvm
+      group: gvm
+
+
+  - name: install openvas-smb
+    shell:
+      cmd: "{{ item }}"
+      chdir: '{{ gvm_src }}/openvas-smb/build/'
+    args:
+      executable: /bin/bash
+    environment:
+      PKG_CONFIG_PATH: "{{ gvm_home }}lib/pkgconfig"
+    loop:
+      - "/usr/bin/cmake -DCMAKE_INSTALL_PREFIX={{ gvm_home }} .."
+      - "make"
+      - "make install"
+    become: true
+    become_user: gvm
+
+
+  - name: relink library
+    shell: ldconfig
+
+
+  - name: backup redis configuration files
+    copy:
+      remote_src: yes
+      src: /etc/redis/redis.conf
+      dest: /etc/redis/redis.orig
+
+
+  - name: create redis configuration file
+    copy:
+      remote_src: yes
+      src: '{{ gvm_src }}/openvas/config/redis-openvas.conf'
+      dest: /etc/redis/redis-openvas.conf
+      owner: redis
+      group: redis
+
+
+  - name: Create OpenVas empty configuration file
+    file:
+      path: '{{ gvm_home }}etc/openvas/openvas.conf'
+      state: touch
+      owner: gvm
+      group: gvm
+
+
+  - name: fix redis socket
+    lineinfile:
+      path: "{{ gvm_home}}etc/openvas/openvas.conf"
+      line: "db_address = /run/redis-openvas/redis.sock"
+
+
+  - name: copy sysctl files for redis optimization
+    copy:
+      src: openvas
+      dest: /etc/sysctl.d/openvas
+
+
+  - name: tune sysctl configuration for redis optimization
+    shell: 
+      cmd: sysctl -w "{{ item }}"
+    loop:
+      - net.core.somaxconn=1024
+      - vm.overcommit_memory=1
+
+
+  - name: disable transparent huge pages
+    copy:
+      src: disable-thp.service
+      dest: /etc/systemd/system/disable-thp.service
+    notify:
+    - reload systemd
+
+
+  - name: enable and start redis
+    service:
+      name: redis-server@openvas.service
+      enabled: yes
+      state: started
+
+
+  - name: enable and start thp
+    service:
+      name: disable-thp.service
+      enabled: yes
+      state: started
+
+
+  - name: create sudo configuration for gvm users
+    file:
+      path: /etc/sudoers.d/gvm
+      state: touch
+
+
+  - name: add permission to run openvas to gvm user
+    lineinfile:
+      path: /etc/sudoers.d/gvm
+      line: "{{ item }}"
+    loop:
+      - 'gvm ALL = NOPASSWD: {{ gvm_home }}sbin/openvas'
+      - 'gvm ALL = NOPASSWD: {{ gvm_home }}sbin/gsad'
+
+  
+  - name: update nvt
+    shell:
+      cmd: greenbone-nvt-sync
+    environment:
+      PATH: "{{ ansible_env.PATH }}:{{ gvm_home }}bin:{{ gvm_home }}sbin:{{ gvm_home }}.local/bin"
+    become: true
+    become_user: gvm
+
+
+  - name: update openvas plugins
+    shell:
+      cmd: openvas -u
+    environment:
+      PATH: "{{ ansible_env.PATH }}:{{ gvm_home }}bin:{{ gvm_home }}sbin:{{ gvm_home }}.local/bin"
+
+
+  - name: confiugre postgreSQL user
+    postgresql_user:
+      name: gvm
+      role_attr_flags: NOSUPERUSER,NOCREATEDB,NOCREATEROLE
+    become: true
+    become_user: postgres
+
+  
+  - name: Create a new database with name gvmd
+    postgresql_db:
+      name: gvmd
+      owner: gvm
+    become: true
+    become_user: postgres
+
+  
+  - name: configure gvmd database
+    shell:
+      cmd: psql gvmd -c 'create role dba with superuser noinherit; grant dba to gvm; create extension "uuid-ossp"; create extension "pgcrypto"; '
+    args:
+      executable: /bin/bash
+    become: true
+    become_user: postgres
+
+
+  - name: fix certs
+    shell:
+      cmd: gvm-manage-certs -a -f
+    args:
+      executable: /bin/bash
+    environment:
+      PATH: "{{ ansible_env.PATH }}:{{ gvm_home }}bin:{{ gvm_home }}sbin:{{ gvm_home }}.local/bin"
+    become: true
+    become_user: gvm
+
+
+  - name: crete gvm GUI user
+    shell:
+      cmd: gvmd --create-user=admin --password=Super_secreT_aNd_compLex_PWD
+    args:
+      executable: /bin/bash
+    environment:
+      PATH: "{{ ansible_env.PATH }}:{{ gvm_home }}bin:{{ gvm_home }}sbin:{{ gvm_home }}.local/bin"
+    become: true
+    become_user: gvm   
+
+
+  - name: get admin UUID
+    shell:
+      cmd : "gvmd --get-users --verbose | awk '{print $2}'"
+    register: admin_uuid
+    args:
+      executable: /bin/bash
+    environment:
+      PATH: "{{ ansible_env.PATH }}:{{ gvm_home }}bin:{{ gvm_home }}sbin:{{ gvm_home }}.local/bin"
+    become: true
+    become_user: gvm
+
+
+  - name: modify gvmd settings
+    shell:
+      cmd : "gvmd --modify-setting 78eceaec-3385-11ea-b237-28d24461215b --value {{ item }}"
+    with_items:
+      - "{{ admin_uuid.stdout }}"
+    args:
+      executable: /bin/bash
+    environment:
+      PATH: "{{ ansible_env.PATH }}:{{ gvm_home }}bin:{{ gvm_home }}sbin:{{ gvm_home }}.local/bin"
+    become: true
+    become_user: gvm
+
+
+  - name: feed sync
+    shell:
+      cmd: greenbone-feed-sync --type "{{ item }}"
+    args:
+      executable: /bin/bash
+    environment:
+      PATH: "{{ ansible_env.PATH }}:{{ gvm_home }}bin:{{ gvm_home }}sbin:{{ gvm_home }}.local/bin"
+    loop:
+      - GVMD_DATA
+      - SCAP
+      - CERT
+    become: true
+    become_user: gvm
+
+
+  - name: install the virtual env
+    shell:
+      cmd: virtualenv --python python3.7  {{ gvm_home }}bin/ospd-scanner/
+      chdir: '{{ gvm_src }}'
+    args:
+      executable: /bin/bash
+    environment:
+      PKG_CONFIG_PATH: "{{ gvm_home }}lib/pkgconfig:$PKG_CONFIG_PATH"
+    become: true
+    become_user: gvm
+
+
+  - name: Create ospd directories
+    file:
+      path: '{{ gvm_home }}var/run/ospd'
+      state: directory
+      owner: gvm
+      group: gvm
+
+  
+  ############# WORK-AROUND ###############
+  - name: Upload venv script
+    copy:
+      src: openvas_venv.sh
+      dest: "{{ gvm_home }}"
+      owner: gvm
+      group: gvm
+      mode: a+x
+  
+
+  - name: Install virtual env
+    shell: 
+      cmd: "{{gvm_home}}openvas_venv.sh"
+    become: true
+    become_user: gvm
+  ########################################
+
+
+  - name: Copy systemd unit files
+    copy:
+      src: "{{ item }}"
+      dest: /etc/systemd/system/
+      mode: 0644
+    loop:
+      - gsad.service
+      - gvmd.service
+      - ospd-openvas.service
+      - firewall.service
+    notify:
+    - reload systemd
+    - enable and start gvmd
+    - enable and start gsad
+    - enable and start ospd-openvas
+
+
+  - name: get scanner UUID
+    shell:
+      cmd : "gvmd --get-scanners |grep OpenVAS |awk '{print $1}'"
+    register: scanner_uuid
+    args:
+      executable: /bin/bash
+    environment:
+      PATH: "{{ ansible_env.PATH }}:{{ gvm_home }}bin:{{ gvm_home }}sbin:{{ gvm_home }}.local/bin"
+    become: true
+    become_user: gvm
+
+
+  - name: modify scanner settings
+    shell:
+      cmd : "gvmd --modify-scanner={{ item }} --scanner-host={{ gvm_home }}var/run/ospd.sock"
+    with_items:
+      - "{{ scanner_uuid.stdout }}"
+    args:
+      executable: /bin/bash
+    environment:
+      PATH: "{{ ansible_env.PATH }}:{{ gvm_home }}bin:{{ gvm_home }}sbin:{{ gvm_home }}.local/bin"
+    become: true
+    become_user: gvm
+
+
+  - name: running post-install actions - adding DB update schedule
+    copy:
+      src: update_nvt
+      dest: /etc/cron.d/
+      mode: 0644
+    notify:
+    - restart cron daemon
+
+
+  - name: running post-install actions - enable incoming connection on TCP 22,443 only
+    copy:
+      src: enable.sh
+      dest: /etc/firewall/
+      mode: 0744
+    notify:
+    - enable and start firewall

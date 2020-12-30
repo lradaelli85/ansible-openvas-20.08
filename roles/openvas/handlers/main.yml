@@ -1,0 +1,61 @@
+  - name: reload systemd
+    systemd:
+      daemon_reload: yes  
+  
+  
+  - name: restart redis
+    service:
+      name: redis
+      state: restarted
+
+
+  - name: enable and start gvmd
+    service:
+      name: gvmd
+      enabled: yes
+      state: started
+
+
+  - name: restart gvmd
+    service:
+      name: gvmd
+      state: restarted
+
+
+  - name: enable and start gsad
+    service:
+      name: gsad
+      enabled: yes
+      state: started
+
+
+  - name: restart gsad
+    service:
+      name: gsad
+      state: restarted
+
+
+  - name: enable and start ospd-openvas
+    service:
+      name: ospd-openvas
+      enabled: yes
+      state: started
+
+  
+  - name: restart ospd-openvas
+    service:
+      name: ospd-openvas
+      state: restarted
+
+
+  - name: restart cron daemon
+    service:
+      name: cron
+      state: restarted
+      
+
+  - name: enable and start firewall
+    service:
+      name: firewall
+      enabled: yes
+      state: started
